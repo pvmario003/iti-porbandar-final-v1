@@ -127,7 +127,7 @@ export default function AdminDashboard({ onLogout, currentUser }: AdminDashboard
     admissionYear: new Date().getFullYear().toString()
   });
 
-  const handleCreateStudentSubmit = (e: React.FormEvent) => {
+  const handleCreateStudentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!studentForm.studentName || !studentForm.fatherName || !studentForm.surname || !studentForm.enrollmentNumber || !studentForm.batchId || !studentForm.category) {
       alert("Please fill in all mandatory student details (Student Name, Father's Name, Surname, Enrollment Number, Batch, Category).");
@@ -174,7 +174,11 @@ export default function AdminDashboard({ onLogout, currentUser }: AdminDashboard
       updatedAt: new Date().toISOString()
     };
 
-    saveStudent(newStudent);
+    const result = await saveStudent(newStudent);
+    if (result && result.error) {
+      return;
+    }
+
     addAuditLog(currentUser.name, `Created student manually: ${newStudent.studentName} ${newStudent.surname} (${newStudent.enrollmentNumber})`);
     
     // Reset Student Form
@@ -200,11 +204,14 @@ export default function AdminDashboard({ onLogout, currentUser }: AdminDashboard
     loadAllData();
   };
 
-  const handleDeleteStudent = (studentId: string, studentName: string) => {
+  const handleDeleteStudent = async (studentId: string, studentName: string) => {
     if (!window.confirm(`Are you sure you want to permanently delete student '${studentName}'? This action cannot be undone.`)) {
       return;
     }
-    deleteStudent(studentId);
+    const result = await deleteStudent(studentId);
+    if (result && result.error) {
+      return;
+    }
     addAuditLog(currentUser.name, `Permanently deleted student record: ${studentName}`);
     loadAllData();
   };

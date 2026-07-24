@@ -321,22 +321,25 @@ export default function ImportStudentsModal({
     setStep("preview");
   };
 
-  const handleFinalImport = () => {
+  const handleFinalImport = async () => {
     if (validRecords.length === 0) {
       alert("No valid student records to import.");
       return;
     }
 
     setImporting(true);
-    setTimeout(() => {
-      saveStudentsBatch(validRecords);
-      addAuditLog(
-        currentUser.name,
-        `Imported ${validRecords.length} students into batch '${targetBatch?.displayName}' via Excel/CSV mapping`
-      );
+    const res = await saveStudentsBatch(validRecords);
+    if (res && res.error) {
       setImporting(false);
-      onImportComplete();
-    }, 800);
+      return;
+    }
+
+    addAuditLog(
+      currentUser.name,
+      `Imported ${validRecords.length} students into batch '${targetBatch?.displayName}' via Excel/CSV mapping`
+    );
+    setImporting(false);
+    onImportComplete();
   };
 
   return (

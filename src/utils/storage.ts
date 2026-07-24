@@ -847,6 +847,85 @@ export function saveBatch(batch: Batch) {
   });
 }
 
+// Sanitizes a Student object into a clean payload matching the exact columns of the 'students' table in Supabase
+export function sanitizeStudentPayload(student: Student): Record<string, any> {
+  const snake = camelToSnake(student);
+
+  // Exact set of columns present in the 'students' table in Supabase schema
+  const ALLOWED_COLUMNS = new Set([
+    "id",
+    "student_name",
+    "father_name",
+    "surname",
+    "enrollment_number",
+    "date_of_birth",
+    "gender",
+    "trade",
+    "batch_id",
+    "batch_name",
+    "academic_session",
+    "year",
+    "shift",
+    "student_mobile_number",
+    "parent_mobile_number",
+    "address",
+    "admission_date",
+    "student_photo",
+    "current_status",
+    "cmd_deposit_number",
+    "aadhaar_number",
+    "category",
+    "admission_year",
+    "full_name_english",
+    "full_name_gujarati",
+    "address_english",
+    "address_gujarati",
+    "exit_effective_date",
+    "exit_outward_number",
+    "exit_outward_date",
+    "exit_reason",
+    "scholarship_type",
+    "scholarship_id",
+    "scholarship_academic_year",
+    "scholarship_status",
+    "bank_account_holder_name",
+    "bank_name",
+    "bank_branch_name",
+    "bank_account_number",
+    "bank_ifsc_code",
+    "documents",
+    "created_at",
+    "updated_at"
+  ]);
+
+  const payload: Record<string, any> = {};
+
+  Object.keys(snake).forEach(key => {
+    if (ALLOWED_COLUMNS.has(key)) {
+      payload[key] = snake[key];
+    }
+  });
+
+  // Critical Foreign Key Fix:
+  // If batch_id is empty string "", "none", or falsy, set to NULL so PostgreSQL foreign key constraint passes
+  if (!payload.batch_id || payload.batch_id === "" || payload.batch_id === "none") {
+    payload.batch_id = null;
+  }
+
+  // Critical Unique Constraint Fix:
+  // If enrollment_number is empty string "", set to NULL so PostgreSQL UNIQUE constraint isn't violated
+  if (payload.enrollment_number === "") {
+    payload.enrollment_number = null;
+  }
+
+  // Ensure documents is a valid object
+  if (!payload.documents || typeof payload.documents !== "object") {
+    payload.documents = {};
+  }
+
+  return payload;
+}
+
 // 4. STUDENT APIs
 export function getStudents(): Student[] {
   return getStoredData<Student>(KEYS.STUDENTS);
@@ -857,133 +936,172 @@ export async function reloadStudentsFromSupabase(): Promise<Student[]> {
   try {
     const { data, error } = await supabase.from("students").select("*");
     if (error) {
-      console.error("Error reloading students from Supabase:", error);
+      console.error("[Supabase Student Reload Error] Failed to fetch students from Supabase:", error);
       return getStudents();
     }
     if (data) {
-      const camelStudents = snakeToCamel(data);
-      setStoredData(KEYS.STUDENTS, camelStudents);
+      const camelStudents: Student[] = snakeToCamel(data);
+      MEMORY_DB[KEYS.STUDENTS] = camelStudents;
+      try {
+        localStorage.setItem(KEYS.STUDENTS, JSON.stringify(camelStudents));
+      } catch (e) {
+        console.warn("Failed to set localStorage with reloaded students:", e);
+      }
       syncStudentsToIndexedDB(camelStudents);
+      console.log(`[Supabase Student Reload Success] Loaded ${camelStudents.length} student records live from Supabase.`);
       return camelStudents;
     }
   } catch (err) {
-    console.error("Exception reloading students from Supabase:", err);
+    console.error("[Supabase Student Reload Exception]:", err);
   }
   return getStudents();
 }
 
-export function saveStudent(student: Student) {
-  const students = getStudents();
-  const idx = students.findIndex(s => s.id === student.id);
-  const now = new Date().toISOString();
-  let updated: Student;
-  if (idx > -1) {
-    updated = { ...student, updatedAt: now };
-    students[idx] = updated;
-  } else {
-    updated = { ...student, createdAt: now, updatedAt: now };
-    students.push(updated);
+export async function saveStudent(student: Student): Promise<{ data: any; error: any }> {
+  if (!student.id) {
+    student.id = "stu-" + generateId();
   }
-  setStoredData(KEYS.STUDENTS, students);
-  syncStudentsToIndexedDB(students);
+  const now = new Date().toISOString();
+  const updatedStudent: Student = {
+    ...student,
+    createdAt: student.createdAt || now,
+    updatedAt: now
+  };
 
-  safeSupabaseOp("Save Student", async () => {
-    const payload = camelToSnake(updated);
-    console.log(`[Supabase Student Sync] Upserting on table 'students', Record ID: '${updated.id}', Payload:`, payload);
+  const payload = sanitizeStudentPayload(updatedStudent);
 
+  console.log(`[Supabase Student SAVE Request] Primary Key 'id': '${updatedStudent.id}', Payload:`, payload);
+
+  // Update local memory cache immediately
+  const list = getStudents();
+  const idx = list.findIndex(s => s.id === updatedStudent.id);
+  if (idx > -1) {
+    list[idx] = updatedStudent;
+  } else {
+    list.push(updatedStudent);
+  }
+  setStoredData(KEYS.STUDENTS, list);
+  syncStudentsToIndexedDB(list);
+
+  if (isSupabaseConfigured) {
     const { data, error } = await supabase
       .from("students")
       .upsert(payload, { onConflict: "id" })
       .select();
 
+    console.log(`[Supabase Student SAVE Response] Primary Key 'id': '${updatedStudent.id}'`, { data, error });
+
     if (error) {
-      console.error("[Supabase Student Sync Error] Error updating/saving student in Supabase:", error);
-    } else {
-      const affectedCount = data ? data.length : 0;
-      console.log(`[Supabase Student Sync Success] Upserted student '${updated.id}'. Affected rows count: ${affectedCount}`, data);
-      if (affectedCount === 1) {
-        console.log(`[Supabase Student Sync Verified] Exactly 1 row affected for student ID '${updated.id}'.`);
-      } else {
-        console.warn(`[Supabase Student Sync Notice] Expected 1 affected row, got ${affectedCount}.`);
-      }
-      await reloadStudentsFromSupabase();
+      console.error("[Supabase Student SAVE Error] Error inserting/updating student in Supabase:", error);
+      alert(`Supabase Error saving student: ${error.message}`);
+      return { data: null, error };
     }
-    return { data, error };
-  });
+
+    const affectedCount = data ? data.length : 0;
+    console.log(`[Supabase Student SAVE Success] Upserted student '${updatedStudent.id}'. Affected rows count: ${affectedCount}`, data);
+
+    if (affectedCount === 1) {
+      console.log(`[Supabase Student SAVE Verified] Exactly 1 row affected in Supabase for student ID '${updatedStudent.id}'.`);
+    } else {
+      console.warn(`[Supabase Student SAVE Warning] Expected 1 affected row, got ${affectedCount}.`);
+    }
+
+    // Immediately reload students from live Supabase DB
+    await reloadStudentsFromSupabase();
+    return { data, error: null };
+  }
+
+  return { data: [updatedStudent], error: null };
 }
 
-export function deleteStudent(id: string) {
-  const students = getStudents();
-  const updated = students.filter(s => s.id !== id);
-  setStoredData(KEYS.STUDENTS, updated);
-  syncStudentsToIndexedDB(updated);
+export async function deleteStudent(id: string): Promise<{ data: any; error: any }> {
+  console.log(`[Supabase Student DELETE Request] Primary Key 'id': '${id}'`);
 
-  safeSupabaseOp("Delete Student", async () => {
-    console.log(`[Supabase Student Delete] Deleting student ID: '${id}' from table 'students'`);
+  // Update local memory cache immediately
+  const list = getStudents().filter(s => s.id !== id);
+  setStoredData(KEYS.STUDENTS, list);
+  syncStudentsToIndexedDB(list);
 
+  if (isSupabaseConfigured) {
     const { data, error } = await supabase
       .from("students")
       .delete()
       .eq("id", id)
       .select();
 
+    console.log(`[Supabase Student DELETE Response] Primary Key 'id': '${id}'`, { data, error });
+
     if (error) {
-      console.error("[Supabase Student Delete Error] Error deleting student from Supabase:", error);
-    } else {
-      const affectedCount = data ? data.length : 0;
-      console.log(`[Supabase Student Delete Success] Deleted student '${id}'. Affected rows count: ${affectedCount}`, data);
-      if (affectedCount === 1) {
-        console.log(`[Supabase Student Delete Verified] Exactly 1 row deleted for student ID '${id}'.`);
-      } else {
-        console.warn(`[Supabase Student Delete Notice] Expected 1 deleted row, got ${affectedCount}.`);
-      }
-      await reloadStudentsFromSupabase();
+      console.error("[Supabase Student DELETE Error] Error deleting student from Supabase:", error);
+      alert(`Supabase Error deleting student: ${error.message}`);
+      return { data: null, error };
     }
-    return { data, error };
-  });
+
+    const affectedCount = data ? data.length : 0;
+    console.log(`[Supabase Student DELETE Success] Deleted student '${id}'. Affected rows count: ${affectedCount}`, data);
+
+    if (affectedCount === 1) {
+      console.log(`[Supabase Student DELETE Verified] Exactly 1 row deleted in Supabase for student ID '${id}'.`);
+    } else {
+      console.warn(`[Supabase Student DELETE Warning] Expected 1 deleted row, got ${affectedCount}.`);
+    }
+
+    // Immediately reload students from live Supabase DB
+    await reloadStudentsFromSupabase();
+    return { data, error: null };
+  }
+
+  return { data: null, error: null };
 }
 
-export function saveStudentsBatch(newStudents: Student[]) {
-  const students = getStudents();
+export async function saveStudentsBatch(newStudents: Student[]): Promise<{ data: any; error: any }> {
+  if (!newStudents || newStudents.length === 0) return { data: [], error: null };
+
   const now = new Date().toISOString();
-  const updatedRecords: Student[] = [];
+  const updatedRecords: Student[] = newStudents.map(stu => ({
+    ...stu,
+    id: stu.id || ("stu-" + generateId()),
+    createdAt: stu.createdAt || now,
+    updatedAt: now
+  }));
 
-  newStudents.forEach(newStu => {
-    const idx = students.findIndex(s => s.id === newStu.id || (newStu.enrollmentNumber && s.enrollmentNumber === newStu.enrollmentNumber));
-    let updated: Student;
-    if (idx > -1) {
-      updated = { ...students[idx], ...newStu, updatedAt: now };
-      students[idx] = updated;
-    } else {
-      updated = { ...newStu, createdAt: now, updatedAt: now };
-      students.push(updated);
-    }
-    updatedRecords.push(updated);
+  const payloadList = updatedRecords.map(s => sanitizeStudentPayload(s));
+
+  console.log(`[Supabase Student BATCH SAVE Request] Count: ${payloadList.length}, Payload:`, payloadList);
+
+  // Update local memory cache immediately
+  const list = getStudents();
+  updatedRecords.forEach(rec => {
+    const idx = list.findIndex(s => s.id === rec.id);
+    if (idx > -1) list[idx] = rec;
+    else list.push(rec);
   });
+  setStoredData(KEYS.STUDENTS, list);
+  syncStudentsToIndexedDB(list);
 
-  setStoredData(KEYS.STUDENTS, students);
-  syncStudentsToIndexedDB(students);
+  if (isSupabaseConfigured) {
+    const { data, error } = await supabase
+      .from("students")
+      .upsert(payloadList, { onConflict: "id" })
+      .select();
 
-  if (updatedRecords.length > 0) {
-    safeSupabaseOp("Save Students Batch", async () => {
-      const payloadList = camelToSnake(updatedRecords);
-      console.log(`[Supabase Student Batch Sync] Upserting ${payloadList.length} students on table 'students'`);
+    console.log(`[Supabase Student BATCH SAVE Response]`, { data, error });
 
-      const { data, error } = await supabase
-        .from("students")
-        .upsert(payloadList, { onConflict: "id" })
-        .select();
+    if (error) {
+      console.error("[Supabase Student BATCH SAVE Error] Error in batch upsert:", error);
+      alert(`Supabase Error saving student batch: ${error.message}`);
+      return { data: null, error };
+    }
 
-      if (error) {
-        console.error("[Supabase Student Batch Sync Error] Error in batch upsert:", error);
-      } else {
-        const affectedCount = data ? data.length : 0;
-        console.log(`[Supabase Student Batch Sync Success] Upserted student batch. Affected rows count: ${affectedCount}`, data);
-        await reloadStudentsFromSupabase();
-      }
-      return { data, error };
-    });
+    const affectedCount = data ? data.length : 0;
+    console.log(`[Supabase Student BATCH SAVE Success] Upserted batch. Affected rows count: ${affectedCount}`, data);
+
+    // Immediately reload students from live Supabase DB
+    await reloadStudentsFromSupabase();
+    return { data, error: null };
   }
+
+  return { data: updatedRecords, error: null };
 }
 
 // 5. STATUS HISTORY APIs
@@ -1222,13 +1340,16 @@ export function promoteStudents(records: PromotionRecord[]) {
 
   const studentUpdates = records.map(rec => {
     const s = students.find(x => x.id === rec.studentId);
-    return s ? camelToSnake(s) : null;
+    return s ? sanitizeStudentPayload(s) : null;
   }).filter(Boolean);
 
-  safeSupabaseOp("Promote Students", () => Promise.all([
-    supabase.from("students").upsert(studentUpdates),
-    supabase.from("promotions").upsert(camelToSnake(records))
-  ]));
+  safeSupabaseOp("Promote Students", async () => {
+    await Promise.all([
+      supabase.from("students").upsert(studentUpdates, { onConflict: "id" }),
+      supabase.from("promotions").upsert(camelToSnake(records))
+    ]);
+    await reloadStudentsFromSupabase();
+  });
 }
 
 export function reversePromotion(promotionId: string, reversedBy: string): boolean {
@@ -1264,10 +1385,13 @@ export function reversePromotion(promotionId: string, reversedBy: string): boole
 
   const studentObj = students.find(x => x.id === rec.studentId);
   if (studentObj) {
-    safeSupabaseOp("Reverse Promotion", () => Promise.all([
-      supabase.from("students").upsert(camelToSnake(studentObj)),
-      supabase.from("promotions").upsert(camelToSnake(rec))
-    ]));
+    safeSupabaseOp("Reverse Promotion", async () => {
+      await Promise.all([
+        supabase.from("students").upsert(sanitizeStudentPayload(studentObj), { onConflict: "id" }),
+        supabase.from("promotions").upsert(camelToSnake(rec))
+      ]);
+      await reloadStudentsFromSupabase();
+    });
   }
   return true;
 }

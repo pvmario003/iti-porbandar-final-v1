@@ -86,7 +86,7 @@ export default function StudentProfileModal({
             updatedAt: new Date().toISOString()
           };
           
-          saveStudent(updatedStudent);
+          await saveStudent(updatedStudent);
           setStudent(updatedStudent);
           addAuditLog(
             currentUser.name,
@@ -102,7 +102,7 @@ export default function StudentProfileModal({
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const base64Data = reader.result as string;
       const updatedDocs = {
         ...(student.documents || {}),
@@ -120,7 +120,7 @@ export default function StudentProfileModal({
         updatedAt: new Date().toISOString()
       };
       
-      saveStudent(updatedStudent);
+      await saveStudent(updatedStudent);
       setStudent(updatedStudent);
       addAuditLog(
         currentUser.name,
@@ -131,7 +131,7 @@ export default function StudentProfileModal({
     reader.readAsDataURL(file);
   };
 
-  const handleDocDelete = (docKey: string) => {
+  const handleDocDelete = async (docKey: string) => {
     if (!window.confirm("Are you sure you want to delete this document?")) return;
     
     const docs = { ...(student.documents || {}) };
@@ -143,7 +143,7 @@ export default function StudentProfileModal({
       updatedAt: new Date().toISOString()
     };
     
-    saveStudent(updatedStudent);
+    await saveStudent(updatedStudent);
     setStudent(updatedStudent);
     addAuditLog(
       currentUser.name,
@@ -266,7 +266,7 @@ export default function StudentProfileModal({
     setStudentHistory(filtered);
   };
 
-  const handleSaveGujarati = () => {
+  const handleSaveGujarati = async () => {
     let hasError = false;
     setInlineGujaratiNameError("");
     setInlineGujaratiAddressError("");
@@ -297,7 +297,12 @@ export default function StudentProfileModal({
       updatedAt: new Date().toISOString()
     };
 
-    saveStudent(updatedStudent);
+    const res = await saveStudent(updatedStudent);
+    if (res && res.error) {
+      setIsSavingGujarati(false);
+      return;
+    }
+
     setStudent(updatedStudent);
 
     // Sync with editForm state in case they toggle full edit view later
@@ -321,7 +326,7 @@ export default function StudentProfileModal({
     }, 3000);
   };
 
-  const handleEditSubmit = (e: React.FormEvent) => {
+  const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     // Mandatory fields validation
@@ -345,7 +350,10 @@ export default function StudentProfileModal({
       currentStatus: editForm.currentStatus,
       updatedAt: new Date().toISOString()
     };
-    saveStudent(updatedStudent);
+    const res = await saveStudent(updatedStudent);
+    if (res && res.error) {
+      return;
+    }
     setStudent(updatedStudent);
     setIsEditing(false);
     addAuditLog(
@@ -355,7 +363,7 @@ export default function StudentProfileModal({
     onUpdate();
   };
 
-  const handleStatusSubmit = (e: React.FormEvent) => {
+  const handleStatusSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newStatus === student.currentStatus) {
       setIsChangingStatus(false);
@@ -379,7 +387,10 @@ export default function StudentProfileModal({
       updatedAt: now.toISOString()
     };
 
-    saveStudent(updatedStudent);
+    const res = await saveStudent(updatedStudent);
+    if (res && res.error) {
+      return;
+    }
     setStudent(updatedStudent);
 
     // Add to history
