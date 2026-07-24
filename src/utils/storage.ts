@@ -873,8 +873,8 @@ export function sanitizeStudentPayload(student: Student): Record<string, any> {
     "student_photo",
     "current_status",
     "cmd_deposit_number",
-    "aadhaar_number",
     "category",
+    "aadhaar_number",
     "admission_year",
     "full_name_english",
     "full_name_gujarati",
@@ -940,7 +940,12 @@ export async function reloadStudentsFromSupabase(): Promise<Student[]> {
       return getStudents();
     }
     if (data) {
-      const camelStudents: Student[] = snakeToCamel(data);
+      const camelStudents: Student[] = snakeToCamel(data).map((stu: any) => ({
+        ...stu,
+        category: stu.category || (stu.documents && typeof stu.documents === "object" ? stu.documents.category : undefined) || "GEN",
+        aadhaarNumber: stu.aadhaarNumber || (stu.documents && typeof stu.documents === "object" ? stu.documents.aadhaar_number : undefined) || "",
+        admissionYear: stu.admissionYear || (stu.documents && typeof stu.documents === "object" ? stu.documents.admission_year : undefined) || ""
+      }));
       MEMORY_DB[KEYS.STUDENTS] = camelStudents;
       try {
         localStorage.setItem(KEYS.STUDENTS, JSON.stringify(camelStudents));
@@ -957,6 +962,61 @@ export async function reloadStudentsFromSupabase(): Promise<Student[]> {
   return getStudents();
 }
 
+// Helper to execute smart upsert adapted to Supabase schema cache
+async function executeSmartUpsert(payload: Record<string, any>): Promise<{ data: any; error: any }> {
+  let currentPayload = { ...payload };
+  let attempts = 0;
+  while (attempts < 5) {
+    attempts++;
+    const { data, error } = await supabase.from("students").upsert(currentPayload, { onConflict: "id" }).select();
+    if (error && error.message && error.message.includes("Could not find the")) {
+      const match = error.message.match(/Could not find the '([^']+)' column/);
+      const missingCol = match ? match[1] : null;
+      if (missingCol) {
+        console.warn(`[Supabase Schema Adaptation] Missing column '${missingCol}', preserving in documents fallback and retrying...`);
+        const docs = typeof currentPayload.documents === "object" && currentPayload.documents ? { ...currentPayload.documents } : {};
+        if (currentPayload[missingCol] !== undefined && currentPayload[missingCol] !== null) {
+          docs[missingCol] = currentPayload[missingCol];
+        }
+        currentPayload = { ...currentPayload, documents: docs };
+        delete currentPayload[missingCol];
+        continue;
+      }
+    }
+    return { data, error };
+  }
+  return await supabase.from("students").upsert(currentPayload, { onConflict: "id" }).select();
+}
+
+// Helper to execute smart batch insert adapted to Supabase schema cache
+async function executeSmartInsert(payloadList: Record<string, any>[]): Promise<{ data: any; error: any }> {
+  let currentPayloads = payloadList.map(p => ({ ...p }));
+  let attempts = 0;
+  while (attempts < 5) {
+    attempts++;
+    const { data, error } = await supabase.from("students").insert(currentPayloads).select();
+    if (error && error.message && error.message.includes("Could not find the")) {
+      const match = error.message.match(/Could not find the '([^']+)' column/);
+      const missingCol = match ? match[1] : null;
+      if (missingCol) {
+        console.warn(`[Supabase Schema Adaptation] Missing column '${missingCol}', preserving in documents fallback and retrying...`);
+        currentPayloads = currentPayloads.map(p => {
+          const docs = typeof p.documents === "object" && p.documents ? { ...p.documents } : {};
+          if (p[missingCol] !== undefined && p[missingCol] !== null) {
+            docs[missingCol] = p[missingCol];
+          }
+          const copy = { ...p, documents: docs };
+          delete copy[missingCol];
+          return copy;
+        });
+        continue;
+      }
+    }
+    return { data, error };
+  }
+  return await supabase.from("students").insert(currentPayloads).select();
+}
+
 export async function saveStudent(student: Student): Promise<{ data: any; error: any }> {
   if (!student.id) {
     student.id = "stu-" + generateId();
@@ -964,6 +1024,7 @@ export async function saveStudent(student: Student): Promise<{ data: any; error:
   const now = new Date().toISOString();
   const updatedStudent: Student = {
     ...student,
+    category: student.category || "GEN",
     createdAt: student.createdAt || now,
     updatedAt: now
   };
@@ -984,10 +1045,7 @@ export async function saveStudent(student: Student): Promise<{ data: any; error:
   syncStudentsToIndexedDB(list);
 
   if (isSupabaseConfigured) {
-    const { data, error } = await supabase
-      .from("students")
-      .upsert(payload, { onConflict: "id" })
-      .select();
+    const { data, error } = await executeSmartUpsert(payload);
 
     console.log(`[Supabase Student SAVE Response] Primary Key 'id': '${updatedStudent.id}'`, { data, error });
 
@@ -1015,7 +1073,14 @@ export async function saveStudent(student: Student): Promise<{ data: any; error:
 }
 
 export async function deleteStudent(id: string): Promise<{ data: any; error: any }> {
-  console.log(`[Supabase Student DELETE Request] Primary Key 'id': '${id}'`);
+  console.log(`[deleteStudent entry] Function entered with Student ID: '${id}'`);
+
+  if (!id) {
+    const err = { message: "Invalid student ID provided for deletion." };
+    console.error("[deleteStudent Error] Invalid or empty student ID provided:", id);
+    alert("Error deleting student: Invalid student ID.");
+    return { data: null, error: err };
+  }
 
   // Update local memory cache immediately
   const list = getStudents().filter(s => s.id !== id);
@@ -1023,17 +1088,24 @@ export async function deleteStudent(id: string): Promise<{ data: any; error: any
   syncStudentsToIndexedDB(list);
 
   if (isSupabaseConfigured) {
-    const { data, error } = await supabase
+    console.log(`[Before Supabase DELETE] Executing query: supabase.from('students').delete().eq('id', '${id}').select()`);
+    const response = await supabase
       .from("students")
       .delete()
       .eq("id", id)
       .select();
 
-    console.log(`[Supabase Student DELETE Response] Primary Key 'id': '${id}'`, { data, error });
+    const { data, error, status, statusText } = response;
+    console.log(`[After Supabase DELETE] Query response received for ID '${id}':`, {
+      status,
+      statusText,
+      deletedRows: data,
+      error
+    });
 
     if (error) {
-      console.error("[Supabase Student DELETE Error] Error deleting student from Supabase:", error);
-      alert(`Supabase Error deleting student: ${error.message}`);
+      console.error("[Supabase Student DELETE Error] Failed to delete student from Supabase:", error);
+      alert(`Supabase Error deleting student: ${error.message || JSON.stringify(error)}`);
       return { data: null, error };
     }
 
@@ -1042,34 +1114,134 @@ export async function deleteStudent(id: string): Promise<{ data: any; error: any
 
     if (affectedCount === 1) {
       console.log(`[Supabase Student DELETE Verified] Exactly 1 row deleted in Supabase for student ID '${id}'.`);
+    } else if (affectedCount === 0) {
+      console.warn(`[Supabase Student DELETE Warning] 0 rows deleted in Supabase for student ID '${id}'. The record may not exist or was already deleted.`);
     } else {
-      console.warn(`[Supabase Student DELETE Warning] Expected 1 deleted row, got ${affectedCount}.`);
+      console.log(`[Supabase Student DELETE Verified] ${affectedCount} rows deleted in Supabase for student ID '${id}'.`);
     }
 
-    // Immediately reload students from live Supabase DB
-    await reloadStudentsFromSupabase();
-    return { data, error: null };
+    // Immediately reload students live from Supabase DB to reflect accurate state
+    const freshStudents = await reloadStudentsFromSupabase();
+    return { data: freshStudents, error: null };
   }
 
   return { data: null, error: null };
 }
 
-export async function saveStudentsBatch(newStudents: Student[]): Promise<{ data: any; error: any }> {
-  if (!newStudents || newStudents.length === 0) return { data: [], error: null };
+export interface BatchSaveResult {
+  data: any;
+  error: any;
+  totalRows: number;
+  insertedCount: number;
+  failedCount: number;
+  failedRowsDetails: Array<{
+    rowNumber: number;
+    studentName: string;
+    enrollmentNumber: string;
+    error: string;
+  }>;
+}
+
+export async function saveStudentsBatch(newStudents: (Student & { rowNumber?: number })[]): Promise<BatchSaveResult> {
+  if (!newStudents || newStudents.length === 0) {
+    return {
+      data: [],
+      error: null,
+      totalRows: 0,
+      insertedCount: 0,
+      failedCount: 0,
+      failedRowsDetails: []
+    };
+  }
 
   const now = new Date().toISOString();
-  const updatedRecords: Student[] = newStudents.map(stu => ({
+  const updatedRecords: (Student & { rowNumber?: number })[] = newStudents.map((stu, index) => ({
     ...stu,
     id: stu.id || ("stu-" + generateId()),
+    category: stu.category || "GEN",
+    rowNumber: stu.rowNumber || (index + 2),
     createdAt: stu.createdAt || now,
     updatedAt: now
   }));
 
   const payloadList = updatedRecords.map(s => sanitizeStudentPayload(s));
 
-  console.log(`[Supabase Student BATCH SAVE Request] Count: ${payloadList.length}, Payload:`, payloadList);
+  console.log(`[Supabase Student BATCH SAVE Request] Count: ${payloadList.length}, Final INSERT Payload:`, payloadList);
 
-  // Update local memory cache immediately
+  if (isSupabaseConfigured) {
+    // Ensure target batches exist in Supabase 'batches' table to satisfy foreign key constraints
+    const batchIds = Array.from(new Set(updatedRecords.map(r => r.batchId).filter(Boolean)));
+    const localBatches = getBatches();
+    for (const bId of batchIds) {
+      const matchBatch = localBatches.find(b => b.id === bId);
+      if (matchBatch) {
+        const batchPayload = camelToSnake(matchBatch);
+        delete batchPayload.capacity;
+        try {
+          await supabase.from("batches").upsert(batchPayload, { onConflict: "id" });
+        } catch (e) {
+          console.warn("[Supabase Batch Pre-sync Warning]", e);
+        }
+      }
+    }
+
+    // 1. Attempt Bulk INSERT using smart insert helper
+    const { data: bulkData, error: bulkError } = await executeSmartInsert(payloadList);
+
+    if (!bulkError && bulkData) {
+      console.log(`[Supabase Student BATCH SAVE Success] Bulk inserted ${bulkData.length} rows into 'students' table.`);
+      // Reload live data directly from Supabase DB
+      await reloadStudentsFromSupabase();
+      return {
+        data: bulkData,
+        error: null,
+        totalRows: updatedRecords.length,
+        insertedCount: bulkData.length,
+        failedCount: 0,
+        failedRowsDetails: []
+      };
+    }
+
+    console.warn("[Supabase Student BATCH SAVE] Bulk insert produced error, attempting row-by-row insertion for error isolation:", bulkError);
+
+    // 2. Row-by-row fallback to isolate exact failing rows and Supabase error messages
+    let insertedCount = 0;
+    const failedRowsDetails: Array<{ rowNumber: number; studentName: string; enrollmentNumber: string; error: string }> = [];
+
+    for (let i = 0; i < updatedRecords.length; i++) {
+      const rec = updatedRecords[i];
+      const payload = payloadList[i];
+
+      const { data: rowData, error: rowError } = await executeSmartInsert([payload]);
+
+      if (rowError) {
+        console.error(`[Supabase Student Row ${rec.rowNumber} Insert Error]`, rowError);
+        failedRowsDetails.push({
+          rowNumber: rec.rowNumber || (i + 2),
+          studentName: `${rec.studentName || ""} ${rec.surname || ""}`.trim() || "Unknown Student",
+          enrollmentNumber: rec.enrollmentNumber || "N/A",
+          error: rowError.message || rowError.details || JSON.stringify(rowError)
+        });
+      } else {
+        insertedCount++;
+      }
+    }
+
+    if (insertedCount > 0) {
+      await reloadStudentsFromSupabase();
+    }
+
+    return {
+      data: null,
+      error: bulkError,
+      totalRows: updatedRecords.length,
+      insertedCount,
+      failedCount: failedRowsDetails.length,
+      failedRowsDetails
+    };
+  }
+
+  // Fallback if offline/unconfigured
   const list = getStudents();
   updatedRecords.forEach(rec => {
     const idx = list.findIndex(s => s.id === rec.id);
@@ -1077,31 +1249,15 @@ export async function saveStudentsBatch(newStudents: Student[]): Promise<{ data:
     else list.push(rec);
   });
   setStoredData(KEYS.STUDENTS, list);
-  syncStudentsToIndexedDB(list);
 
-  if (isSupabaseConfigured) {
-    const { data, error } = await supabase
-      .from("students")
-      .upsert(payloadList, { onConflict: "id" })
-      .select();
-
-    console.log(`[Supabase Student BATCH SAVE Response]`, { data, error });
-
-    if (error) {
-      console.error("[Supabase Student BATCH SAVE Error] Error in batch upsert:", error);
-      alert(`Supabase Error saving student batch: ${error.message}`);
-      return { data: null, error };
-    }
-
-    const affectedCount = data ? data.length : 0;
-    console.log(`[Supabase Student BATCH SAVE Success] Upserted batch. Affected rows count: ${affectedCount}`, data);
-
-    // Immediately reload students from live Supabase DB
-    await reloadStudentsFromSupabase();
-    return { data, error: null };
-  }
-
-  return { data: updatedRecords, error: null };
+  return {
+    data: updatedRecords,
+    error: null,
+    totalRows: updatedRecords.length,
+    insertedCount: updatedRecords.length,
+    failedCount: 0,
+    failedRowsDetails: []
+  };
 }
 
 // 5. STATUS HISTORY APIs
@@ -1820,7 +1976,13 @@ export async function syncFromSupabase() {
     } else {
       setStoredData(KEYS.BATCHES, snakeToCamel(dbBatches));
     }
-    setStoredData(KEYS.STUDENTS, dbStudents ? snakeToCamel(dbStudents) : []);
+    const initialStudents: Student[] = dbStudents ? snakeToCamel(dbStudents).map((stu: any) => ({
+      ...stu,
+      category: stu.category || (stu.documents && typeof stu.documents === "object" ? stu.documents.category : undefined) || "GEN",
+      aadhaarNumber: stu.aadhaarNumber || (stu.documents && typeof stu.documents === "object" ? stu.documents.aadhaar_number : undefined) || "",
+      admissionYear: stu.admissionYear || (stu.documents && typeof stu.documents === "object" ? stu.documents.admission_year : undefined) || ""
+    })) : [];
+    setStoredData(KEYS.STUDENTS, initialStudents);
     setStoredData(KEYS.HISTORY, dbHistory ? snakeToCamel(dbHistory) : []);
     setStoredData(KEYS.LOGS, dbLogs ? dbLogs.map((l: any) => ({
       id: l.id,

@@ -1039,6 +1039,12 @@ export default function StudentProfileModal({
                   <span className="text-sm font-semibold text-slate-800">{student.gender}</span>
                 </div>
                 <div>
+                  <span className="text-xs text-slate-400 block font-medium">Category (કેટેગરી)</span>
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                    {student.category || "GEN"}
+                  </span>
+                </div>
+                <div>
                   <span className="text-xs text-slate-400 block font-medium">Date of Birth (જન્મ તારીખ)</span>
                   <span className="text-sm font-semibold text-slate-800 font-mono">
                     {student.dateOfBirth ? new Date(student.dateOfBirth).toLocaleDateString() : "-"}

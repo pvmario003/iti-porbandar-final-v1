@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import * as XLSX from "xlsx";
 import { X, Upload, Check, AlertTriangle, ArrowRight, ArrowLeft, Loader, FileSpreadsheet, Download } from "lucide-react";
 import { Student, StudentStatus, Batch } from "../types";
-import { getStudents, saveStudentsBatch, addAuditLog, transliterateEnglishToGujarati } from "../utils/storage";
+import { getStudents, saveStudentsBatch, addAuditLog, transliterateEnglishToGujarati, BatchSaveResult, reloadStudentsFromSupabase } from "../utils/storage";
 import { downloadSampleStudentExcel, downloadSampleStudentCsv } from "../utils/exportUtils";
 
 interface ImportStudentsModalProps {
@@ -27,7 +27,7 @@ export default function ImportStudentsModal({
   onImportComplete,
   currentUser
 }: ImportStudentsModalProps) {
-  const [step, setStep] = useState<"batch" | "upload" | "map" | "preview">("batch");
+  const [step, setStep] = useState<"batch" | "upload" | "map" | "preview" | "result">("batch");
   const [selectedBatchId, setSelectedBatchId] = useState<string>(preselectedBatchId);
   const [fileName, setFileName] = useState("");
   const [parsing, setParsing] = useState(false);
@@ -52,10 +52,11 @@ export default function ImportStudentsModal({
     { appField: "admissionDate", label: "Admission Date (YYYY-MM-DD)", required: false, mappedHeader: "" }
   ]);
 
-  // Validation results
-  const [validRecords, setValidRecords] = useState<Student[]>([]);
+  // Validation results & Import execution results
+  const [validRecords, setValidRecords] = useState<(Student & { rowNumber?: number })[]>([]);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<BatchSaveResult | null>(null);
 
   const activeBatches = batches.filter(b => {
     const isApproved = b.status === "APPROVED";
@@ -190,11 +191,13 @@ export default function ImportStudentsModal({
   };
 
   // Perform client-side verification and check constraints
-  const validateAndCompileData = () => {
+  const validateAndCompileData = async () => {
     const errors: string[] = [];
-    const valid: Student[] = [];
-    const existingStudents = getStudents();
-    const existingEnrollments = new Set(existingStudents.map(s => s.enrollmentNumber.toUpperCase().trim()));
+    const valid: (Student & { rowNumber?: number })[] = [];
+    
+    // Refresh live students from Supabase first for strict duplicate checking
+    const existingStudents = await reloadStudentsFromSupabase();
+    const existingEnrollments = new Set(existingStudents.map(s => (s.enrollmentNumber || "").toUpperCase().trim()));
 
     if (!targetBatch) {
       errors.push("Destination batch not found.");
@@ -269,9 +272,9 @@ export default function ImportStudentsModal({
 
       const cleanEnr = enr.toUpperCase();
 
-      // Check for global duplicates
+      // Check for global duplicates in Supabase
       if (existingEnrollments.has(cleanEnr)) {
-        errors.push(`Row ${rowNum}: Duplicate Enrollment Number '${enr}' is already registered in another batch.`);
+        errors.push(`Row ${rowNum}: Duplicate Enrollment Number '${enr}' is already registered in the database.`);
         return;
       }
 
@@ -283,10 +286,11 @@ export default function ImportStudentsModal({
 
       localEnrollments.add(cleanEnr);
 
-      // Create valid student record
+      // Create valid student record with explicit rowNumber
       const studentId = "imported-" + Math.random().toString(36).substring(2, 11);
-      const newStudent: Student = {
+      const newStudent: Student & { rowNumber?: number } = {
         id: studentId,
+        rowNumber: rowNum,
         studentName: sName,
         fatherName: fName,
         surname: surname,
@@ -328,18 +332,18 @@ export default function ImportStudentsModal({
     }
 
     setImporting(true);
-    const res = await saveStudentsBatch(validRecords);
-    if (res && res.error) {
-      setImporting(false);
-      return;
-    }
-
-    addAuditLog(
-      currentUser.name,
-      `Imported ${validRecords.length} students into batch '${targetBatch?.displayName}' via Excel/CSV mapping`
-    );
+    const result = await saveStudentsBatch(validRecords);
     setImporting(false);
-    onImportComplete();
+    setImportResult(result);
+    setStep("result");
+
+    if (result.insertedCount > 0) {
+      addAuditLog(
+        currentUser.name,
+        `Imported ${result.insertedCount} students into batch '${targetBatch?.displayName}' via Excel/CSV mapping`
+      );
+      onImportComplete();
+    }
   };
 
   return (
@@ -358,7 +362,7 @@ export default function ImportStudentsModal({
           </div>
           <button 
             onClick={onClose}
-            className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-slate-800"
+            className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-slate-800 cursor-pointer"
             aria-label="Close"
           >
             <X size={18} />
@@ -374,6 +378,8 @@ export default function ImportStudentsModal({
           <span className={`${step === "map" ? "text-slate-900 font-bold" : ""}`}>3. Map Columns</span>
           <ArrowRight size={12} className="text-slate-300" />
           <span className={`${step === "preview" ? "text-slate-900 font-bold" : ""}`}>4. Verify & Commit</span>
+          <ArrowRight size={12} className="text-slate-300" />
+          <span className={`${step === "result" ? "text-slate-900 font-bold" : ""}`}>5. Results</span>
         </div>
 
         {/* Content Area */}
@@ -593,7 +599,7 @@ export default function ImportStudentsModal({
                     <p className="text-xl font-extrabold text-emerald-700 leading-none mt-1">
                       {validRecords.length}
                     </p>
-                    <p className="text-[10px] text-slate-400 font-medium mt-1">Students ready for enrollment</p>
+                    <p className="text-[10px] text-slate-400 font-medium mt-1">Students ready for Supabase insertion</p>
                   </div>
                 </div>
 
@@ -615,7 +621,7 @@ export default function ImportStudentsModal({
               {validationErrors.length > 0 && (
                 <div className="border border-amber-200 rounded-xl bg-amber-50/20 p-4 space-y-2 max-h-[160px] overflow-y-auto">
                   <h4 className="text-xs font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
-                    <AlertTriangle size={14} /> Validation Errors Detail
+                    <AlertTriangle size={14} /> Pre-validation Errors Detail
                   </h4>
                   <ul className="list-disc pl-4 space-y-1 text-xs text-slate-600 font-medium">
                     {validationErrors.map((err, i) => (
@@ -640,6 +646,7 @@ export default function ImportStudentsModal({
                     <table className="w-full text-left text-xs">
                       <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider sticky top-0 border-b border-slate-200">
                         <tr>
+                          <th className="p-2.5">Row #</th>
                           <th className="p-2.5">Name</th>
                           <th className="p-2.5">Enrollment No</th>
                           <th className="p-2.5">Gender</th>
@@ -650,6 +657,7 @@ export default function ImportStudentsModal({
                       <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                         {validRecords.map((stu, i) => (
                           <tr key={i} className="hover:bg-slate-50/40">
+                            <td className="p-2.5 text-slate-400 font-mono font-bold">Row {stu.rowNumber}</td>
                             <td className="p-2.5">{stu.studentName} {stu.fatherName} {stu.surname}</td>
                             <td className="p-2.5 font-mono text-slate-600">{stu.enrollmentNumber}</td>
                             <td className="p-2.5">{stu.gender}</td>
@@ -679,13 +687,113 @@ export default function ImportStudentsModal({
                 >
                   {importing ? (
                     <>
-                      <Loader className="animate-spin" size={14} /> Importing...
+                      <Loader className="animate-spin" size={14} /> Inserting into Supabase...
                     </>
                   ) : (
                     <>
-                      <Check size={14} /> Import {validRecords.length} Students
+                      <Check size={14} /> Bulk Insert {validRecords.length} Students to Supabase
                     </>
                   )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 5: RESULTS DISPLAY */}
+          {step === "result" && importResult && (
+            <div className="space-y-4 py-2">
+              {/* Banner */}
+              {importResult.failedCount === 0 ? (
+                <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-3">
+                  <div className="p-2.5 bg-emerald-100 text-emerald-700 rounded-xl shrink-0">
+                    <Check size={22} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-emerald-900">Import Completed Successfully</h4>
+                    <p className="text-xs text-emerald-700 mt-0.5">
+                      All {importResult.insertedCount} student records were permanently inserted into the Supabase <code className="font-mono bg-emerald-100/80 px-1.5 py-0.5 rounded text-[11px]">students</code> table.
+                    </p>
+                  </div>
+                </div>
+              ) : importResult.insertedCount > 0 ? (
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 flex items-center gap-3">
+                  <div className="p-2.5 bg-amber-100 text-amber-700 rounded-xl shrink-0">
+                    <AlertTriangle size={22} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-amber-900">Import Process Completed with Warnings</h4>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      {importResult.insertedCount} records inserted into Supabase <code className="font-mono bg-amber-100/80 px-1.5 py-0.5 rounded text-[11px]">students</code> table. {importResult.failedCount} row(s) failed.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-red-50 border border-red-200 flex items-center gap-3">
+                  <div className="p-2.5 bg-red-100 text-red-700 rounded-xl shrink-0">
+                    <AlertTriangle size={22} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-red-900">Import Failed</h4>
+                    <p className="text-xs text-red-700 mt-0.5">
+                      0 records were inserted into Supabase. Review the exact Supabase errors below.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Requirement 9: Metric Display */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-center">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Rows Imported</p>
+                  <p className="text-2xl font-black text-slate-900 mt-1">{importResult.totalRows}</p>
+                </div>
+
+                <div className="p-3.5 bg-emerald-50/50 border border-emerald-200 rounded-xl text-center">
+                  <p className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider">Successfully Inserted</p>
+                  <p className="text-2xl font-black text-emerald-700 mt-1">{importResult.insertedCount}</p>
+                </div>
+
+                <div className="p-3.5 bg-red-50/50 border border-red-200 rounded-xl text-center">
+                  <p className="text-[11px] font-bold text-red-700 uppercase tracking-wider">Failed Rows</p>
+                  <p className="text-2xl font-black text-red-700 mt-1">{importResult.failedCount}</p>
+                </div>
+              </div>
+
+              {/* Requirement 8: Exact Supabase Error and Row Number Display */}
+              {importResult.failedRowsDetails && importResult.failedRowsDetails.length > 0 && (
+                <div className="border border-red-200 rounded-xl overflow-hidden bg-red-50/20">
+                  <div className="bg-red-100/60 px-4 py-2.5 border-b border-red-200 flex items-center gap-2">
+                    <AlertTriangle size={16} className="text-red-700" />
+                    <h4 className="text-xs font-bold text-red-900 uppercase tracking-wider">
+                      Failed Rows & Supabase Error Details ({importResult.failedRowsDetails.length})
+                    </h4>
+                  </div>
+                  <div className="max-h-[200px] overflow-y-auto divide-y divide-red-100 p-2">
+                    {importResult.failedRowsDetails.map((item, idx) => (
+                      <div key={idx} className="p-2.5 text-xs text-slate-800 space-y-1">
+                        <div className="flex items-center justify-between font-bold">
+                          <span className="text-red-700 font-mono">Row {item.rowNumber}</span>
+                          <span className="text-slate-800">{item.studentName} (Enrollment: <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200 text-slate-700">{item.enrollmentNumber}</code>)</span>
+                        </div>
+                        <div className="p-2 bg-white rounded-lg border border-red-200 font-mono text-[11px] text-red-800 break-words">
+                          Supabase Error: {item.error}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onImportComplete();
+                    onClose();
+                  }}
+                  className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer transition-colors flex items-center gap-2"
+                >
+                  <Check size={16} /> Complete & Finish
                 </button>
               </div>
             </div>
@@ -699,10 +807,11 @@ export default function ImportStudentsModal({
             onClick={onClose}
             className="px-4 py-2 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
           >
-            Cancel
+            {step === "result" ? "Close Window" : "Cancel"}
           </button>
         </div>
       </div>
     </div>
   );
 }
+

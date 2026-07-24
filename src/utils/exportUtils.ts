@@ -1367,8 +1367,8 @@ import { exportOfficialOnRollPDF, exportOfficialOnRollExcel } from "./officialRe
 
 export { exportOfficialOnRollPDF, exportOfficialOnRollExcel };
 
-export function exportOnRollSummaryExcel(students: Student[], filename: string = "Official_ITI_Porbandar_OnRoll_Report") {
-  exportOfficialOnRollExcel(filename);
+export async function exportOnRollSummaryExcel(students: Student[], filename: string = "Official_ITI_Porbandar_OnRoll_Report") {
+  await exportOfficialOnRollExcel(filename);
 }
 
 export async function exportOnRollSummaryPDF(students: Student[], filename: string = "Official_ITI_Porbandar_OnRoll_Report") {

@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import html2canvas from "html2canvas";
@@ -1117,207 +1118,362 @@ export async function exportOfficialOnRollPDF(filename: string = "Official_ITI_P
 }
 
 /**
- * Generates the Official Government Master On-Roll Excel Report in exact layout with Shruti font
+ * Generates the Official Government Master On-Roll Excel Report in exact layout matching PDF using ExcelJS
  */
-export function exportOfficialOnRollExcel(filename: string = "Official_ITI_Porbandar_OnRoll_Report", year: number = 2026, month: number = 8, customData?: OfficialOnRollReportData) {
+export async function exportOfficialOnRollExcel(
+  filename: string = "Official_ITI_Porbandar_OnRoll_Report",
+  year: number = 2026,
+  month: number = 8,
+  customData?: OfficialOnRollReportData
+) {
   try {
     const data = customData || calculateOnRollReportData(year, month);
     const dateTitle = `${data.generatedDate} ENDED ONROLL`;
 
-    // Construct 2D array matching the exact Government layout
-    const aoa: any[][] = [];
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "ITI Porbandar Management System";
+    workbook.created = new Date();
 
-    // Row 0: Top title banner
-    const row0 = Array(28).fill("");
-    row0[0] = "ITI PORBANDAR";
-    row0[5] = dateTitle;
-    aoa.push(row0);
-
-    // Row 1: Header Level 1
-    const row1 = [
-      "ક્રમ", "ટ્રેડ", "બેચ", "મંજુર બેઠકો", "ભરાયેલ બેઠકો",
-      dateTitle, "", "", "",
-      "GEN", "SC", "ST", "OBC", "EWS", "FEMALE",
-      "50% થી ઓછી હાજરી વાળા તાલીમાર્થીઓની સંખ્યા",
-      "50% થી 80% હાજરી વાળા તાલીમાર્થીઓની સંખ્યા",
-      "ઓછા હાજર બાબતે વાલીને જાણ કરેલ તાલીમાર્થીઓની સંખ્યા",
-      "ડ્રોપ આઉટ %",
-      "બંધ મશીનની સંખ્યા",
-      "ફોર્મેટિવ એસેસમેન્ટ કેટલા તાલીમાર્થીઓનું કરેલ છે",
-      "ઇન્ડસ્ટ્રીયલ વિઝિટની સંખ્યા",
-      "તાલીમાર્થીઓની સંખ્યા",
-      "કંપનીની સંખ્યા",
-      "OJTમાં જોડાયેલ તાલીમાર્થીઓની સંખ્યા / MoUની (કંપની ની સંખ્યા)",
-      "સંસ્થાકીય સ્ટાઇપેન્ડ મેળવતા તાલીમાર્થી ની સંખ્યા",
-      "સમાજ-કલ્યાણ શિષ્યવૃત્તિ મેળવતા તાલીમાર્થી ની સંખ્યા",
-      "વાલી મીટીંગની સંખ્યા / હાજર વાલીની સંખ્યા"
-    ];
-    aoa.push(row1);
-
-    // Row 2: Sub-headers
-    const row2 = Array(28).fill("");
-    row2[5] = "A"; row2[6] = "B"; row2[7] = "C"; row2[8] = "Total";
-    aoa.push(row2);
-
-    // Data rows
-    let jrIndex = 1;
-    let srIndex = 1;
-
-    const jrRows = data.rows.filter(r => !r.isSenior);
-    jrRows.forEach(r => {
-      aoa.push([
-        (jrIndex++).toString(), r.tradeCode, r.batchNumber,
-        formatReportCellVal(r.approvedSeats),
-        formatReportCellVal(r.filledSeats),
-        formatReportCellVal(r.batchA),
-        formatReportCellVal(r.batchB),
-        formatReportCellVal(r.batchC),
-        formatReportCellVal(r.onRoll),
-        formatReportCellVal(r.gen), formatReportCellVal(r.sc), formatReportCellVal(r.st), formatReportCellVal(r.sebc), formatReportCellVal(r.ews), formatReportCellVal(r.female),
-        formatReportCellVal(r.attLessThan50), formatReportCellVal(r.att50To80), formatReportCellVal(r.attParentsInformed),
-        r.dropoutCount ? r.dropoutPct : "-",
-        formatReportCellVal(r.brokenMachinesCount),
-        formatReportCellVal(r.assessmentCompleted), formatReportCellVal(r.industrialVisitCount), formatReportCellVal(r.visitTraineesCount),
-        formatReportCellVal(r.companiesVisitedCount), `${r.ojtTraineesCount || 0}/${r.mouCompaniesCount || 0}`, formatReportCellVal(r.instStipendCount),
-        formatReportCellVal(r.socialWelfareCount), `${r.guardianMeetingsCount || 0}/${r.attendedParentsCount || 0}`
-      ]);
-    });
-
-    // Junior Total Row
-    const jt = data.juniorTotal;
-    aoa.push([
-      "જુનીયર બેચ ટોટલ :", "", "",
-      formatReportCellVal(jt.approvedSeats),
-      formatReportCellVal(jt.filledSeats),
-      formatReportCellVal(jt.batchA),
-      formatReportCellVal(jt.batchB),
-      formatReportCellVal(jt.batchC),
-      formatReportCellVal(jt.onRoll),
-      formatReportCellVal(jt.gen), formatReportCellVal(jt.sc), formatReportCellVal(jt.st), formatReportCellVal(jt.sebc), formatReportCellVal(jt.ews), formatReportCellVal(jt.female),
-      formatReportCellVal(jt.attLessThan50), formatReportCellVal(jt.att50To80), formatReportCellVal(jt.attParentsInformed),
-      formatReportCellVal(jt.dropoutCount),
-      formatReportCellVal(jt.brokenMachinesCount), formatReportCellVal(jt.assessmentCompleted),
-      formatReportCellVal(jt.industrialVisitCount), formatReportCellVal(jt.visitTraineesCount), formatReportCellVal(jt.companiesVisitedCount),
-      `${jt.ojtTraineesCount || 0}/${jt.mouCompaniesCount || 0}`, formatReportCellVal(jt.instStipendCount), formatReportCellVal(jt.socialWelfareCount), `${jt.guardianMeetingsCount || 0}/${jt.attendedParentsCount || 0}`
-    ]);
-
-    const srRows = data.rows.filter(r => r.isSenior);
-    srRows.forEach(r => {
-      aoa.push([
-        (srIndex++).toString(), r.tradeCode, r.batchNumber,
-        formatReportCellVal(r.approvedSeats),
-        formatReportCellVal(r.filledSeats),
-        formatReportCellVal(r.batchA),
-        formatReportCellVal(r.batchB),
-        formatReportCellVal(r.batchC),
-        formatReportCellVal(r.onRoll),
-        formatReportCellVal(r.gen), formatReportCellVal(r.sc), formatReportCellVal(r.st), formatReportCellVal(r.sebc), formatReportCellVal(r.ews), formatReportCellVal(r.female),
-        formatReportCellVal(r.attLessThan50), formatReportCellVal(r.att50To80), formatReportCellVal(r.attParentsInformed),
-        r.dropoutCount ? r.dropoutPct : "-",
-        formatReportCellVal(r.brokenMachinesCount),
-        formatReportCellVal(r.assessmentCompleted), formatReportCellVal(r.industrialVisitCount), formatReportCellVal(r.visitTraineesCount),
-        formatReportCellVal(r.companiesVisitedCount), `${r.ojtTraineesCount || 0}/${r.mouCompaniesCount || 0}`, formatReportCellVal(r.instStipendCount),
-        formatReportCellVal(r.socialWelfareCount), `${r.guardianMeetingsCount || 0}/${r.attendedParentsCount || 0}`
-      ]);
-    });
-
-    // Senior Total Row
-    const st = data.seniorTotal;
-    aoa.push([
-      "સીનીયર બેચ ટોટલ :", "", "",
-      formatReportCellVal(st.approvedSeats),
-      formatReportCellVal(st.filledSeats),
-      formatReportCellVal(st.batchA),
-      formatReportCellVal(st.batchB),
-      formatReportCellVal(st.batchC),
-      formatReportCellVal(st.onRoll),
-      formatReportCellVal(st.gen), formatReportCellVal(st.sc), formatReportCellVal(st.st), formatReportCellVal(st.sebc), formatReportCellVal(st.ews), formatReportCellVal(st.female),
-      formatReportCellVal(st.attLessThan50), formatReportCellVal(st.att50To80), formatReportCellVal(st.attParentsInformed),
-      formatReportCellVal(st.dropoutCount),
-      formatReportCellVal(st.brokenMachinesCount), formatReportCellVal(st.assessmentCompleted),
-      formatReportCellVal(st.industrialVisitCount), formatReportCellVal(st.visitTraineesCount), formatReportCellVal(st.companiesVisitedCount),
-      `${st.ojtTraineesCount || 0}/${st.mouCompaniesCount || 0}`, formatReportCellVal(st.instStipendCount), formatReportCellVal(st.socialWelfareCount), `${st.guardianMeetingsCount || 0}/${st.attendedParentsCount || 0}`
-    ]);
-
-    // Grand Total Row
-    const gt = data.grandTotal;
-    aoa.push([
-      "કુલ તાલીમાર્થીઓ", "", "",
-      formatReportCellVal(gt.approvedSeats),
-      formatReportCellVal(gt.filledSeats),
-      formatReportCellVal(gt.batchA),
-      formatReportCellVal(gt.batchB),
-      formatReportCellVal(gt.batchC),
-      formatReportCellVal(gt.onRoll),
-      formatReportCellVal(gt.gen), formatReportCellVal(gt.sc), formatReportCellVal(gt.st), formatReportCellVal(gt.sebc), formatReportCellVal(gt.ews), formatReportCellVal(gt.female),
-      formatReportCellVal(gt.attLessThan50), formatReportCellVal(gt.att50To80), formatReportCellVal(gt.attParentsInformed),
-      formatReportCellVal(gt.dropoutCount),
-      formatReportCellVal(gt.brokenMachinesCount), formatReportCellVal(gt.assessmentCompleted),
-      formatReportCellVal(gt.industrialVisitCount), formatReportCellVal(gt.visitTraineesCount), formatReportCellVal(gt.companiesVisitedCount),
-      `${gt.ojtTraineesCount || 0}/${gt.mouCompaniesCount || 0}`, formatReportCellVal(gt.instStipendCount), formatReportCellVal(gt.socialWelfareCount), `${gt.guardianMeetingsCount || 0}/${gt.attendedParentsCount || 0}`
-    ]);
-
-    const worksheet = XLSX.utils.aoa_to_sheet(aoa);
-
-    // Set column widths matching Excel sheet proportions
-    worksheet["!cols"] = [
-      { wch: 6 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 12 },
-      { wch: 5 }, { wch: 5 }, { wch: 5 }, { wch: 8 },
-      { wch: 7 }, { wch: 6 }, { wch: 6 }, { wch: 7 }, { wch: 7 }, { wch: 8 },
-      { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 9 }, { wch: 14 }, { wch: 11 }, { wch: 11 }, { wch: 12 }
-    ];
-
-    // Set merged cells matching Government PDF
-    const merges: XLSX.Range[] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },   // ITI PORBANDAR
-      { s: { r: 0, c: 5 }, e: { r: 0, c: 27 } },  // 31/08/2026 ENDED ONROLL
-      { s: { r: 1, c: 0 }, e: { r: 2, c: 0 } },   // Sr No
-      { s: { r: 1, c: 1 }, e: { r: 2, c: 1 } },   // Trade
-      { s: { r: 1, c: 2 }, e: { r: 2, c: 2 } },   // Batch
-      { s: { r: 1, c: 3 }, e: { r: 2, c: 3 } },   // Approved
-      { s: { r: 1, c: 4 }, e: { r: 2, c: 4 } },   // Filled
-      { s: { r: 1, c: 5 }, e: { r: 1, c: 8 } },   // ENDED ONROLL (A, B, C, Total)
-    ];
-
-    // Merge category headers across row 1 and row 2 for cols 9..14
-    for (let c = 9; c <= 14; c++) {
-      merges.push({ s: { r: 1, c }, e: { r: 2, c } });
-    }
-
-    // Merge rotated headers across row 1 and row 2 for cols 15..27
-    for (let c = 15; c <= 27; c++) {
-      merges.push({ s: { r: 1, c }, e: { r: 2, c } });
-    }
-
-    // Merge totals labels across columns 0..2
-    const jrTotalRowIdx = 3 + jrRows.length;
-    const srTotalRowIdx = jrTotalRowIdx + 1 + srRows.length;
-    const grandTotalRowIdx = srTotalRowIdx + 1;
-
-    merges.push({ s: { r: jrTotalRowIdx, c: 0 }, e: { r: jrTotalRowIdx, c: 2 } });
-    merges.push({ s: { r: srTotalRowIdx, c: 0 }, e: { r: srTotalRowIdx, c: 2 } });
-    merges.push({ s: { r: grandTotalRowIdx, c: 0 }, e: { r: grandTotalRowIdx, c: 2 } });
-
-    worksheet["!merges"] = merges;
-
-    // Apply Shruti font property & cell alignment on cells
-    Object.keys(worksheet).forEach(cellKey => {
-      if (cellKey.startsWith("!")) return;
-      const cell = worksheet[cellKey];
-      if (cell && typeof cell === "object") {
-        cell.s = cell.s || {};
-        cell.s.font = { name: "Shruti", sz: 10 };
-        cell.s.alignment = { vertical: "center", horizontal: "center", wrapText: true };
+    const worksheet = workbook.addWorksheet("OnRoll_Report", {
+      views: [{ state: "frozen", xSplit: 0, ySplit: 3 }],
+      pageSetup: {
+        orientation: "landscape",
+        paperSize: 9 as any, // A4 paper size in Excel OpenXML
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+        margins: {
+          left: 0.25,
+          right: 0.25,
+          top: 0.25,
+          bottom: 0.25,
+          header: 0.1,
+          footer: 0.1
+        }
       }
     });
 
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "OnRoll_Report");
-    XLSX.writeFile(workbook, `${filename}.xlsx`);
+    // Define column widths matching PDF canvas proportions
+    const colWidths = [
+      6, 10, 7, 10, 10,      // A..E: Sr, Trade, Batch, Approved, Filled
+      6, 6, 6, 8,            // F..I: A, B, C, Total
+      7, 6, 6, 7, 7, 8,      // J..O: GEN, SC, ST, OBC, EWS, FEMALE
+      10, 10, 10, 8, 8, 10, 9, 9, 8, 12, 10, 10, 11 // P..AB: 13 Rotated Headers
+    ];
 
-    alert(`Official On-Roll Excel Report downloaded: ${filename}.xlsx`);
+    colWidths.forEach((w, idx) => {
+      worksheet.getColumn(idx + 1).width = w;
+    });
+
+    const thinBorder: ExcelJS.Border = { style: "thin", color: { argb: "FF000000" } };
+    const allBorders: Partial<ExcelJS.Borders> = {
+      top: thinBorder,
+      left: thinBorder,
+      bottom: thinBorder,
+      right: thinBorder
+    };
+
+    // Helper to format/style a single cell
+    const styleCell = (
+      rowNum: number,
+      colNum: number,
+      value: any,
+      opts: {
+        bold?: boolean;
+        fontSize?: number;
+        align?: "left" | "center" | "right";
+        valign?: "top" | "middle" | "bottom";
+        textRotation?: number;
+        bgColor?: string;
+      } = {}
+    ) => {
+      const cell = worksheet.getCell(rowNum, colNum);
+      cell.value = value;
+      cell.font = {
+        name: "Shruti",
+        size: opts.fontSize || 9.5,
+        bold: !!opts.bold,
+        color: { argb: "FF000000" }
+      };
+      cell.alignment = {
+        horizontal: opts.align || "center",
+        vertical: opts.valign || "middle",
+        wrapText: true,
+        textRotation: opts.textRotation !== undefined ? opts.textRotation : 0
+      };
+      cell.border = allBorders;
+      if (opts.bgColor) {
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: opts.bgColor }
+        };
+      }
+    };
+
+    // Helper to style a merged range
+    const mergeAndStyle = (
+      startRow: number,
+      startCol: number,
+      endRow: number,
+      endCol: number,
+      value: any,
+      opts: {
+        bold?: boolean;
+        fontSize?: number;
+        align?: "left" | "center" | "right";
+        valign?: "top" | "middle" | "bottom";
+        textRotation?: number;
+        bgColor?: string;
+      } = {}
+    ) => {
+      worksheet.mergeCells(startRow, startCol, endRow, endCol);
+      for (let r = startRow; r <= endRow; r++) {
+        for (let c = startCol; c <= endCol; c++) {
+          const cell = worksheet.getCell(r, c);
+          cell.border = allBorders;
+          cell.font = {
+            name: "Shruti",
+            size: opts.fontSize || 9.5,
+            bold: !!opts.bold,
+            color: { argb: "FF000000" }
+          };
+          cell.alignment = {
+            horizontal: opts.align || "center",
+            vertical: opts.valign || "middle",
+            wrapText: true,
+            textRotation: opts.textRotation !== undefined ? opts.textRotation : 0
+          };
+          if (opts.bgColor) {
+            cell.fill = {
+              type: "pattern",
+              pattern: "solid",
+              fgColor: { argb: opts.bgColor }
+            };
+          }
+        }
+      }
+      const topCell = worksheet.getCell(startRow, startCol);
+      topCell.value = value;
+    };
+
+    // ROW 1: Title Banner
+    worksheet.getRow(1).height = 28;
+    mergeAndStyle(1, 1, 1, 5, "ITI PORBANDAR", { bold: true, fontSize: 11, align: "center", valign: "middle" });
+    mergeAndStyle(1, 6, 1, 28, dateTitle, { bold: true, fontSize: 11, align: "center", valign: "middle" });
+
+    // HEADER ROWS 2 & 3
+    worksheet.getRow(2).height = 65;
+    worksheet.getRow(3).height = 65;
+
+    // Static Cols 1..5 (A..E)
+    const col0Names = ["ક્રમ", "ટ્રેડ", "બેચ", "મંજૂર બેઠકો", "ભરાયેલ બેઠકો"];
+    col0Names.forEach((name, i) => {
+      mergeAndStyle(2, i + 1, 3, i + 1, name, { bold: true, fontSize: 9.5, textRotation: 90 });
+    });
+
+    // Date Header (Cols 6..9: A, B, C, Total)
+    mergeAndStyle(2, 6, 2, 9, dateTitle, { bold: true, fontSize: 9.5 });
+    styleCell(3, 6, "A", { bold: true, fontSize: 9.5 });
+    styleCell(3, 7, "B", { bold: true, fontSize: 9.5 });
+    styleCell(3, 8, "C", { bold: true, fontSize: 9.5 });
+    styleCell(3, 9, "Total", { bold: true, fontSize: 9.5 });
+
+    // Category headers (Cols 10..15: GEN, SC, ST, OBC, EWS, FEMALE)
+    const catNames = ["GEN", "SC", "ST", "OBC", "EWS", "FEMALE"];
+    catNames.forEach((cat, i) => {
+      mergeAndStyle(2, 10 + i, 3, 10 + i, cat, { bold: true, fontSize: 9.5, textRotation: 90 });
+    });
+
+    // 13 Rotated Headers (Cols 16..28)
+    const rotatedHeaders = [
+      "50% થી ઓછી હાજરી વાળા\nતાલીમાર્થીઓની સંખ્યા",
+      "50% થી 80% હાજરી વાળા\nતાલીમાર્થીઓની સંખ્યા",
+      "ઓછા હાજર બાબતે વાલીને\nજાણ કરેલ તાલીમાર્થીઓની સંખ્યા",
+      "ડ્રોપ આઉટ %",
+      "બંધ મશીનની સંખ્યા",
+      "ફોર્મેટિવ એસેસમેન્ટ કેટલા\nતાલીમાર્થીઓનું કરેલ છે",
+      "ઇન્ડસ્ટ્રીયલ વિઝિટની સંખ્યા",
+      "તાલીમાર્થીઓની સંખ્યા",
+      "કંપનીની સંખ્યા",
+      "OJTમાં જોડાયેલ તાલીમાર્થીઓની\nસંખ્યા / MoUની (કંપની ની સંખ્યા)",
+      "સંસ્થાકીય સ્ટાઇપેન્ડ મેળવતા\nતાલીમાર્થી ની સંખ્યા",
+      "સમાજ-કલ્યાણ શિષ્યવૃત્તિ\nમેળવતા તાલીમાર્થી ની સંખ્યા",
+      "વાલી મીટીંગની સંખ્યા /\nહાજર વાલીની સંખ્યા"
+    ];
+
+    rotatedHeaders.forEach((text, i) => {
+      mergeAndStyle(2, 16 + i, 3, 16 + i, text, { bold: true, fontSize: 9.5, textRotation: 90 });
+    });
+
+    let currentRowNum = 4;
+
+    const jrRows = data.rows.filter(r => !r.isSenior);
+    const srRows = data.rows.filter(r => r.isSenior);
+
+    // Helper to render a data row
+    const addDataRow = (vals: string[], isBoldTrade = false) => {
+      const row = worksheet.getRow(currentRowNum);
+      row.height = 22;
+      vals.forEach((val, colIdx) => {
+        styleCell(currentRowNum, colIdx + 1, val, {
+          bold: isBoldTrade && colIdx === 1,
+          fontSize: 9.5,
+          align: "center",
+          valign: "middle"
+        });
+      });
+      currentRowNum++;
+    };
+
+    // Helper to render a total row
+    const addTotalRow = (label: string, totalObj: OnRollReportRow) => {
+      const row = worksheet.getRow(currentRowNum);
+      row.height = 24;
+
+      mergeAndStyle(currentRowNum, 1, currentRowNum, 3, label, {
+        bold: true,
+        fontSize: 10,
+        align: "left",
+        valign: "middle"
+      });
+
+      const totalVals = [
+        formatReportCellVal(totalObj.approvedSeats),
+        formatReportCellVal(totalObj.filledSeats),
+        formatReportCellVal(totalObj.batchA),
+        formatReportCellVal(totalObj.batchB),
+        formatReportCellVal(totalObj.batchC),
+        formatReportCellVal(totalObj.onRoll),
+        formatReportCellVal(totalObj.gen),
+        formatReportCellVal(totalObj.sc),
+        formatReportCellVal(totalObj.st),
+        formatReportCellVal(totalObj.sebc),
+        formatReportCellVal(totalObj.ews),
+        formatReportCellVal(totalObj.female),
+        formatReportCellVal(totalObj.attLessThan50),
+        formatReportCellVal(totalObj.att50To80),
+        formatReportCellVal(totalObj.attParentsInformed),
+        formatReportCellVal(totalObj.dropoutCount),
+        formatReportCellVal(totalObj.brokenMachinesCount),
+        formatReportCellVal(totalObj.assessmentCompleted),
+        formatReportCellVal(totalObj.industrialVisitCount),
+        formatReportCellVal(totalObj.visitTraineesCount),
+        formatReportCellVal(totalObj.companiesVisitedCount),
+        `${totalObj.ojtTraineesCount || 0}/${totalObj.mouCompaniesCount || 0}`,
+        formatReportCellVal(totalObj.instStipendCount),
+        formatReportCellVal(totalObj.socialWelfareCount),
+        `${totalObj.guardianMeetingsCount || 0}/${totalObj.attendedParentsCount || 0}`
+      ];
+
+      totalVals.forEach((val, colIdx) => {
+        styleCell(currentRowNum, colIdx + 4, val, {
+          bold: true,
+          fontSize: 9.5,
+          align: "center",
+          valign: "middle"
+        });
+      });
+
+      currentRowNum++;
+    };
+
+    // 1. Render Junior Rows
+    let jrIndex = 1;
+    jrRows.forEach(r => {
+      addDataRow([
+        (jrIndex++).toString(),
+        r.tradeCode,
+        r.batchNumber,
+        formatReportCellVal(r.approvedSeats),
+        formatReportCellVal(r.filledSeats),
+        formatReportCellVal(r.batchA),
+        formatReportCellVal(r.batchB),
+        formatReportCellVal(r.batchC),
+        formatReportCellVal(r.onRoll),
+        formatReportCellVal(r.gen),
+        formatReportCellVal(r.sc),
+        formatReportCellVal(r.st),
+        formatReportCellVal(r.sebc),
+        formatReportCellVal(r.ews),
+        formatReportCellVal(r.female),
+        formatReportCellVal(r.attLessThan50),
+        formatReportCellVal(r.att50To80),
+        formatReportCellVal(r.attParentsInformed),
+        r.dropoutCount ? r.dropoutPct : "-",
+        formatReportCellVal(r.brokenMachinesCount),
+        formatReportCellVal(r.assessmentCompleted),
+        formatReportCellVal(r.industrialVisitCount),
+        formatReportCellVal(r.visitTraineesCount),
+        formatReportCellVal(r.companiesVisitedCount),
+        r.ojtTraineesCount ? `${r.ojtTraineesCount}/${r.mouCompaniesCount || 0}` : "-",
+        formatReportCellVal(r.instStipendCount),
+        formatReportCellVal(r.socialWelfareCount),
+        r.guardianMeetingsCount ? `${r.guardianMeetingsCount}/${r.attendedParentsCount || 0}` : "-"
+      ], true);
+    });
+
+    // 2. Render Junior Total Row
+    addTotalRow("જુનીયર બેચ ટોટલ :", data.juniorTotal);
+
+    // 3. Render Senior Rows
+    let srIndex = 1;
+    srRows.forEach(r => {
+      addDataRow([
+        (srIndex++).toString(),
+        r.tradeCode,
+        r.batchNumber,
+        formatReportCellVal(r.approvedSeats),
+        formatReportCellVal(r.filledSeats),
+        formatReportCellVal(r.batchA),
+        formatReportCellVal(r.batchB),
+        formatReportCellVal(r.batchC),
+        formatReportCellVal(r.onRoll),
+        formatReportCellVal(r.gen),
+        formatReportCellVal(r.sc),
+        formatReportCellVal(r.st),
+        formatReportCellVal(r.sebc),
+        formatReportCellVal(r.ews),
+        formatReportCellVal(r.female),
+        formatReportCellVal(r.attLessThan50),
+        formatReportCellVal(r.att50To80),
+        formatReportCellVal(r.attParentsInformed),
+        r.dropoutCount ? r.dropoutPct : "-",
+        formatReportCellVal(r.brokenMachinesCount),
+        formatReportCellVal(r.assessmentCompleted),
+        formatReportCellVal(r.industrialVisitCount),
+        formatReportCellVal(r.visitTraineesCount),
+        formatReportCellVal(r.companiesVisitedCount),
+        r.ojtTraineesCount ? `${r.ojtTraineesCount}/${r.mouCompaniesCount || 0}` : "-",
+        formatReportCellVal(r.instStipendCount),
+        formatReportCellVal(r.socialWelfareCount),
+        r.guardianMeetingsCount ? `${r.guardianMeetingsCount}/${r.attendedParentsCount || 0}` : "-"
+      ], true);
+    });
+
+    // 4. Render Senior Total Row
+    addTotalRow("સીનીયર બેચ ટોટલ :", data.seniorTotal);
+
+    // 5. Render Grand Total Row
+    addTotalRow("કુલ તાલીમાર્થીઓ", data.grandTotal);
+
+    // Generate buffer & trigger browser download
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const fullFilename = filename.endsWith(".xlsx") ? filename : `${filename}.xlsx`;
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fullFilename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    console.log(`Official On-Roll Excel Report downloaded successfully: ${fullFilename}`);
   } catch (err: any) {
     console.error("Failed to generate Official On-Roll Excel:", err);
-    alert("Error generating Excel report: " + err.message);
+    alert("Error generating Excel report: " + (err.message || err));
   }
 }

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { 
   Users, Layers, GraduationCap, CheckCircle2, Clock, 
   AlertCircle, ShieldAlert, Plus, Edit2, Check, X, Search, Filter, Database, BookOpen,
-  FileSpreadsheet, FileText, Trash2
+  FileSpreadsheet, FileText, Trash2, RefreshCw
 } from "lucide-react";
 import { 
   User, UserRole, Batch, BatchStatus, Student, StudentStatus, AuditLog, STUDENT_STATUS_LABELS, Trade, BatchAssignmentHistory, PromotionRecord, SIProfile 
@@ -51,6 +51,8 @@ export default function AdminDashboard({ onLogout, currentUser }: AdminDashboard
 
   // Selected student for Profile View
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [studentToDelete, setStudentToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [isDeletingStudent, setIsDeletingStudent] = useState(false);
 
   // S.I. CRUD state
   const [editingSi, setEditingSi] = useState<User | null>(null);
@@ -204,16 +206,54 @@ export default function AdminDashboard({ onLogout, currentUser }: AdminDashboard
     loadAllData();
   };
 
-  const handleDeleteStudent = async (studentId: string, studentName: string) => {
-    if (!window.confirm(`Are you sure you want to permanently delete student '${studentName}'? This action cannot be undone.`)) {
+  const handleDeleteStudent = (studentId: string, studentName: string) => {
+    console.log(`[Button click] Delete request initiated for Student ID: '${studentId}', Name: '${studentName}'`);
+    if (!studentId) {
+      alert("Error: Cannot delete student with missing or invalid ID.");
       return;
     }
-    const result = await deleteStudent(studentId);
-    if (result && result.error) {
+    console.log(`[Confirmation dialog] Displaying deletion confirmation modal for Student ID: '${studentId}', Name: '${studentName}'`);
+    setStudentToDelete({ id: studentId, name: studentName });
+  };
+
+  const handleConfirmDeleteStudent = async () => {
+    if (!studentToDelete || !studentToDelete.id) {
+      console.error("[Confirmation dialog Error] Invalid student selected for deletion.");
       return;
     }
-    addAuditLog(currentUser.name, `Permanently deleted student record: ${studentName}`);
-    loadAllData();
+
+    console.log(`[Confirmation dialog] User confirmed deletion for Student ID: '${studentToDelete.id}', Name: '${studentToDelete.name}'`);
+    setIsDeletingStudent(true);
+
+    try {
+      console.log(`[deleteStudent entry] Executing deleteStudent('${studentToDelete.id}')`);
+      const result = await deleteStudent(studentToDelete.id);
+
+      if (result && result.error) {
+        console.error("[Delete failed] Supabase DELETE query returned error:", result.error);
+        alert(`Supabase Error deleting student '${studentToDelete.name}': ${result.error.message || JSON.stringify(result.error)}`);
+        setIsDeletingStudent(false);
+        return;
+      }
+
+      console.log(`[Delete success] Student '${studentToDelete.name}' (ID: '${studentToDelete.id}') permanently removed from Supabase.`);
+
+      if (selectedStudent && selectedStudent.id === studentToDelete.id) {
+        setSelectedStudent(null);
+      }
+
+      addAuditLog(currentUser.name, `Permanently deleted student record: ${studentToDelete.name} (ID: ${studentToDelete.id})`);
+
+      setStudentToDelete(null);
+      setIsDeletingStudent(false);
+
+      // Reload live student data from Supabase and refresh Dashboard stats
+      await loadAllData();
+    } catch (err: any) {
+      console.error("[Delete exception] Unexpected error during deletion:", err);
+      alert(`Unexpected error deleting student: ${err.message || err}`);
+      setIsDeletingStudent(false);
+    }
   };
 
   useEffect(() => {
@@ -2865,7 +2905,12 @@ export default function AdminDashboard({ onLogout, currentUser }: AdminDashboard
                                   View Folder
                                 </button>
                                 <button
-                                  onClick={() => handleDeleteStudent(student.id, `${student.studentName} ${student.surname}`)}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    console.log(`[Button click] Student table row Delete button clicked for Student ID: '${student.id}', Name: '${student.studentName} ${student.surname}'`);
+                                    handleDeleteStudent(student.id, `${student.studentName} ${student.surname}`.trim());
+                                  }}
                                   className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-[10px] font-bold text-red-700 border border-red-200 rounded-md cursor-pointer transition-all"
                                   title="Delete Student Record"
                                 >
@@ -4318,6 +4363,56 @@ export default function AdminDashboard({ onLogout, currentUser }: AdminDashboard
             if (updated) setSelectedStudent(updated);
           }}
         />
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {studentToDelete && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-5">
+            <div className="flex items-center gap-3 text-red-600">
+              <div className="p-3 bg-red-100 rounded-full border border-red-200 flex items-center justify-center">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-800">Permanently Delete Student?</h3>
+                <p className="text-xs text-slate-500 font-medium">This action cannot be undone.</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-600 leading-relaxed">
+              Are you sure you want to permanently delete student <strong className="text-slate-900 font-bold">{studentToDelete.name}</strong> (ID: <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-mono">{studentToDelete.id}</code>) from the database? This will permanently remove the record from Supabase.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isDeletingStudent}
+                onClick={() => {
+                  console.log("[Confirmation dialog] User cancelled deletion.");
+                  setStudentToDelete(null);
+                }}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingStudent}
+                onClick={handleConfirmDeleteStudent}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
+              >
+                {isDeletingStudent ? (
+                  <>
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <span>Delete Student</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>
