@@ -1,0 +1,6 @@
+{
+  "name": "ITI Management System",
+  "description": "A comprehensive administrative system for Industrial Training Institutes, supporting student enrollment, multi-batch scheduling, role-based controls, and Gujarati Unicode support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
